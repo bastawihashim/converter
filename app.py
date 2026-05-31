@@ -11,12 +11,11 @@ import io
 import re
 
 import arabic_reshaper
-from bidi.algorithm import get_display
 
 app = Flask(__name__)
 CORS(app)
 
-# اُردو اور عربی اعراب کی مکمل کنفیگریشن
+# اُردو، عربی اور قرآنی اعراب کی مکمل کنفیگریشن
 configuration = {
     'delete_harakat': False,     # اعراب کو حذف نہیں کرنا
     'support_ligatures': True,   # قرآنی جوڑوں کو برقرار رکھنا
@@ -25,12 +24,12 @@ configuration = {
 }
 reshaper = arabic_reshaper.ArabicReshaper(configuration=configuration)
 
-# 🛠️ مائیکروسافٹ ورڈ کو آفیشل اردو/عربی اسکرپٹ پر مجبور کرنے کا فول پروف فنکشن
+# 🛠️ مائیکروسافٹ ورڈ کو مینوئل الٹ پھیر کے بغیر آفیشل اردو/عربی اسکرپٹ پر چلانے کا فنکشن
 def apply_strict_word_rtl(paragraph, font_name, font_size_pt):
     paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     pPr = paragraph._p.get_or_add_pPr()
     
-    # 1. پیراگراف کو بتانا کہ یہ دائیں سے بائیں (RTL) ہے
+    # 1. پیراگراف کو دائیں سے بائیں (RTL) سیٹ کرنا
     bidi = OxmlElement('w:bidi')
     bidi.set(qn('w:val'), '1')
     pPr.append(bidi)
@@ -39,18 +38,17 @@ def apply_strict_word_rtl(paragraph, font_name, font_size_pt):
         for run in paragraph.runs:
             rPr = run._r.get_or_add_rPr()
             
-            # 2. ہر حرف کو بتانا کہ وہ رائٹ ٹو لیفٹ اسکرپٹ کا حصہ ہے
+            # 2. ہر حرف کو بتانا کہ وہ رائٹ ٹو لیفٹ سکرپٹ کا حصہ ہے
             rtl_element = OxmlElement('w:rtl')
             rtl_element.set(qn('w:val'), '1')
             rPr.append(rtl_element)
             
-            # 3. 🔥 سب سے اہم قدم: مائیکروسافٹ ورڈ کا ڈیفالٹ لینگویج انجن اردو پر سیٹ کرنا
-            # یہ کمانڈ ورڈ کو مجبور کرتی ہے کہ وہ حروف کو الگ الگ کرنے کے بجائے جوڑ کر لکھے
+            # 3. مائیکروسافٹ ورڈ کا ڈیفالٹ لینگویج انجن اردو پر لاک کرنا تاکہ حروف نہ بکھریں
             lang = OxmlElement('w:lang')
-            lang.set(qn('w:bidi'), 'ur-PK')  # اُردو (پاکستان/ہندوستان) رسم الخط کا آفیشل کوڈ
+            lang.set(qn('w:bidi'), 'ur-PK')  # اُردو کا آفیشل ونڈوز کوڈ
             rPr.append(lang)
             
-            # 4. فونٹس کو Complex Script (cs) میں سیٹ کرنا تاکہ نستعلیق چلے
+            # 4. فونٹس کو Complex Script (cs) میں سیٹ کرنا
             rFonts = OxmlElement('w:rFonts')
             rFonts.set(qn('w:cs'), font_name)
             rFonts.set(qn('w:ascii'), font_name)
@@ -74,7 +72,7 @@ def is_arabic_text(text):
 
 @app.route('/')
 def home():
-    return "Official Microsoft Word RTL Arabic & Urdu Fixed Backend is Live!"
+    return "Official Urdu & Arabic Fixed Backend is Running!"
 
 @app.route('/convert', methods=['POST'])
 def convert_pdf_to_word():
@@ -104,13 +102,11 @@ def convert_pdf_to_word():
         lines = extracted_text.split('\n')
         for line in lines:
             if line.strip():
-                # الفاظ کو خوبصورت شیپ میں جوڑنا
-                reshaped_text = reshaper.reshape(line)
-                # دائیں سے بائیں کی بائی ڈائریکشنل ترتیب درست کرنا
-                display_line = get_display(reshaped_text)
+                # 🔥 جادوئی قدم: صرف حروف کو خوبصورت شیپ میں جوڑیں، کوئی مینوئل الٹ پھیر (bidi) نہیں کرنا
+                reshaped_line = reshaper.reshape(line)
                 
                 p = doc.add_paragraph()
-                p.add_run(display_line)
+                p.add_run(reshaped_line)
                 
                 # خودکار طریقے سے فونٹ کا انتخاب
                 if is_arabic_text(line):
@@ -131,7 +127,7 @@ def convert_pdf_to_word():
             word_io,
             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             as_attachment=True,
-            download_name="Urdu_Arabic_Perfect_Converted.docx"
+            download_name="Urdu_Arabic_Perfect_Fixed.docx"
         )
 
     except Exception as e:
