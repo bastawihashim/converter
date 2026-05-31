@@ -10,26 +10,15 @@ from docx.oxml.ns import qn
 import io
 import re
 
-import arabic_reshaper
-
 app = Flask(__name__)
 CORS(app)
 
-# اُردو، عربی اور قرآنی اعراب کی مکمل کنفیگریشن
-configuration = {
-    'delete_harakat': False,     # اعراب کو حذف نہیں کرنا
-    'support_ligatures': True,   # قرآنی جوڑوں کو برقرار رکھنا
-    'arabic': True,              # عربی کی مکمل سپورٹ
-    'farsi': True,               # اُردو اور فارسی کے مخصوص حروف کی سپورٹ
-}
-reshaper = arabic_reshaper.ArabicReshaper(configuration=configuration)
-
-# 🛠️ مائیکروسافٹ ورڈ کو مینوئل الٹ پھیر کے بغیر آفیشل اردو/عربی اسکرپٹ پر چلانے کا فنکشن
+# مائیکروسافٹ ورڈ کو آفیشل اردو/عربی اسکرپٹ (RTL) پر لاک کرنے کا فنکشن
 def apply_strict_word_rtl(paragraph, font_name, font_size_pt):
     paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     pPr = paragraph._p.get_or_add_pPr()
     
-    # 1. پیراگراف کو دائیں سے بائیں (RTL) سیٹ کرنا
+    # 1. پیراگراف دائیں سے بائیں سیٹ کریں
     bidi = OxmlElement('w:bidi')
     bidi.set(qn('w:val'), '1')
     pPr.append(bidi)
@@ -38,24 +27,24 @@ def apply_strict_word_rtl(paragraph, font_name, font_size_pt):
         for run in paragraph.runs:
             rPr = run._r.get_or_add_rPr()
             
-            # 2. ہر حرف کو بتانا کہ وہ رائٹ ٹو لیفٹ سکرپٹ کا حصہ ہے
+            # 2. رائٹ ٹو لیفٹ سکرپٹ ایکٹو کریں
             rtl_element = OxmlElement('w:rtl')
             rtl_element.set(qn('w:val'), '1')
             rPr.append(rtl_element)
             
-            # 3. مائیکروسافٹ ورڈ کا ڈیفالٹ لینگویج انجن اردو پر لاک کرنا تاکہ حروف نہ بکھریں
+            # 3. مائیکروسافٹ ورڈ کا ڈیفالٹ لینگویج انجن اردو پر لاک کریں
             lang = OxmlElement('w:lang')
-            lang.set(qn('w:bidi'), 'ur-PK')  # اُردو کا آفیشل ونڈوز کوڈ
+            lang.set(qn('w:bidi'), 'ur-PK')
             rPr.append(lang)
             
-            # 4. فونٹس کو Complex Script (cs) میں سیٹ کرنا
+            # 4. فونٹس کی ترتیب سیٹ کریں
             rFonts = OxmlElement('w:rFonts')
             rFonts.set(qn('w:cs'), font_name)
             rFonts.set(qn('w:ascii'), font_name)
             rFonts.set(qn('w:hAnsi'), font_name)
             rPr.append(rFonts)
             
-            # 5. فونٹ کا سائز لاک کرنا
+            # 5. فونٹ سائز لاک کریں
             sz = OxmlElement('w:sz')
             sz.set(qn('w:val'), str(int(font_size_pt * 2)))
             rPr.append(sz)
@@ -70,9 +59,35 @@ def is_arabic_text(text):
         return True
     return False
 
+# 🔥 جادوئی یونیکوڈ فکسر: جو صرف لفظ کے اندرونی الٹے حروف کو فزیکلی سیدھا کرے گا
+def fix_urdu_visual_to_logical(text):
+    lines = text.split('\n')
+    fixed_lines = []
+    
+    for line in lines:
+        if not line.strip():
+            fixed_lines.append("")
+            continue
+            
+        words = line.split()
+        fixed_words = []
+        
+        for word in words:
+            # اگر لفظ میں اردو/عربی حروف ہیں تو صرف اس کے اندرونی حروف کو الٹ کر سیدھا لاجیکل یونیکوڈ بنائیں
+            if re.search(r'[\u0600-\u06FF]', word):
+                fixed_words.append(word[::-1])
+            else:
+                # انگلش الفاظ یا نمبروں کو بالکل نہیں چھیڑنا
+                fixed_words.append(word)
+                
+        # جملے میں الفاظ کی ترتیب وہی رہے گی، کوئی الٹ پھیر نہیں ہوگی
+        fixed_lines.append(" ".join(fixed_words))
+        
+    return "\n".join(fixed_lines)
+
 @app.route('/')
 def home():
-    return "Official Urdu & Arabic Fixed Backend is Running!"
+    return "Pure Logical Unicode Urdu & Arabic PDF to Word Converter Backend is Live!"
 
 @app.route('/convert', methods=['POST'])
 def convert_pdf_to_word():
@@ -87,7 +102,7 @@ def convert_pdf_to_word():
         pdf_bytes = file.read()
         extracted_text = ""
         
-        # پی ڈی ایف سے ٹیکسٹ نکالنا
+        # پی ڈی ایف سے راء ٹیکسٹ نکالنا
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
@@ -97,16 +112,16 @@ def convert_pdf_to_word():
         if not extracted_text.strip():
             return jsonify({"error": "Is PDF me koi text nahi mila."}), 400
 
+        # 🔥 یہاں ہم الٹے حروف کو خالص اور سیدھے لاجیکل یونیکوڈ میں تبدیل کر رہے ہیں
+        perfect_unicode_text = fix_urdu_visual_to_logical(extracted_text)
+
         doc = Document()
         
-        lines = extracted_text.split('\n')
+        lines = perfect_unicode_text.split('\n')
         for line in lines:
             if line.strip():
-                # 🔥 جادوئی قدم: صرف حروف کو خوبصورت شیپ میں جوڑیں، کوئی مینوئل الٹ پھیر (bidi) نہیں کرنا
-                reshaped_line = reshaper.reshape(line)
-                
                 p = doc.add_paragraph()
-                p.add_run(reshaped_line)
+                p.add_run(line) # اب بالکل سیدھا اور اصلی یونیکوڈ ٹیکسٹ ورڈ میں جائے گا
                 
                 # خودکار طریقے سے فونٹ کا انتخاب
                 if is_arabic_text(line):
@@ -116,7 +131,7 @@ def convert_pdf_to_word():
                     font_name = 'Noto Nastaliq Urdu'
                     font_size = 14
                 
-                # مائیکروسافٹ ورڈ کی اندرونی فکسنگ لاگو کرنا
+                # مائیکروسافٹ ورڈ کی سیٹنگز لاگو کرنا
                 apply_strict_word_rtl(p, font_name, font_size)
 
         word_io = io.BytesIO()
@@ -127,7 +142,7 @@ def convert_pdf_to_word():
             word_io,
             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             as_attachment=True,
-            download_name="Urdu_Arabic_Perfect_Fixed.docx"
+            download_name="Urdu_Arabic_Perfect_Unicode.docx"
         )
 
     except Exception as e:
