@@ -10,27 +10,27 @@ from docx.oxml.ns import qn
 import io
 import re
 
-# الفاظ اور اعراب کو آپس میں جوڑنے کا انجن
 import arabic_reshaper
+from bidi.algorithm import get_display
 
 app = Flask(__name__)
 CORS(app)
 
-# اُردو، عربی اور قرآنی اعراب کو ایک ساتھ جوڑنے کی سیٹنگ
+# اُردو، عربی اور قرآنی اعراب کی مکمل سپورٹ کی کنفیگریشن
 configuration = {
-    'delete_harakat': False,     # اعراب (زیر، زبر، پیش) کو حذف نہیں کرنا
-    'support_ligatures': True,   # قرآنی جوڑوں کو درست رکھنا
+    'delete_harakat': False,     # اعراب کو حذف نہیں کرنا
+    'support_ligatures': True,   # قرآنی جوڑوں کو برقرار رکھنا
     'arabic': True,              # عربی کی مکمل سپورٹ
-    'farsi': True,               # اُردو/فارسی کے مخصوص حروف (ٹ، ڈ، ڑ، چ، پ، گ) کی سپورٹ
+    'farsi': True,               # اُردو اور فارسی کے مخصوص حروف کی سپورٹ
 }
 reshaper = arabic_reshaper.ArabicReshaper(configuration=configuration)
 
-# مائیکروسافٹ ورڈ کے اندرونی نظام کو فکس کرنا تاکہ وہ الفاظ کو بکھیرے نہیں
-def fix_word_rtl_and_fonts(paragraph, font_name, font_size_pt):
+# مائیکروسافٹ ورڈ کو مینوئل الٹنے کے بجائے آفیشل مڈل ایسٹ لینگویج ٹیگ دینا
+def setup_microsoft_word_rtl(paragraph, font_name, font_size_pt):
     paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     pPr = paragraph._p.get_or_add_pPr()
     
-    # دائیں سے بائیں نظام ایکٹو کرنا
+    # دائیں سے بائیں (RTL) الائنمنٹ لاگو کرنا
     bidi = OxmlElement('w:bidi')
     bidi.set(qn('w:val'), '1')
     pPr.append(bidi)
@@ -39,19 +39,19 @@ def fix_word_rtl_and_fonts(paragraph, font_name, font_size_pt):
         for run in paragraph.runs:
             rPr = run._r.get_or_add_rPr()
             
-            # رائٹ ٹو لیفٹ سکرپٹ لاک کرنا
+            # رائٹ ٹو لیفٹ سکرپٹ ایکٹو کرنا
             rtl_element = OxmlElement('w:rtl')
             rtl_element.set(qn('w:val'), '1')
             rPr.append(rtl_element)
             
-            # فونٹس کو مائیکروسافٹ ورڈ کے Complex Script (cs) میں سیو کرنا
+            # مائیکروسافٹ ورڈ کو بتانا کہ یہ کمپلیکس اسکرپٹ (CS) ہے تاکہ حروف نہ بکھریں
             rFonts = OxmlElement('w:rFonts')
             rFonts.set(qn('w:cs'), font_name)
             rFonts.set(qn('w:ascii'), font_name)
             rFonts.set(qn('w:hAnsi'), font_name)
             rPr.append(rFonts)
             
-            # فونٹ سائز سیٹ کرنا
+            # فونٹ کا سائز سیٹ کرنا
             sz = OxmlElement('w:sz')
             sz.set(qn('w:val'), str(int(font_size_pt * 2)))
             rPr.append(sz)
@@ -59,8 +59,8 @@ def fix_word_rtl_and_fonts(paragraph, font_name, font_size_pt):
             szCs.set(qn('w:val'), str(int(font_size_pt * 2)))
             rPr.append(szCs)
 
-# یہ چیک کرنے کا فنکشن کہ لائن قرآنی آیت/عربی ہے یا اُردو
-def is_arabic_line(text):
+# قرآنی علامات اور اعراب کو چیک کرنے کا فنکشن
+def is_quranic_or_arabic(text):
     arabic_char_count = len(re.findall(r'[\u064b-\u065f\u0671\u06d6-\u06dc]', text))
     if arabic_char_count > 0:
         return True
@@ -68,7 +68,7 @@ def is_arabic_line(text):
 
 @app.route('/')
 def home():
-    return "Perfect Urdu, Arabic & Quranic PDF to Word Converter Backend is Running!"
+    return "Official Urdu & Arabic PDF to Word Converter Backend is Live!"
 
 @app.route('/convert', methods=['POST'])
 def convert_pdf_to_word():
@@ -83,7 +83,7 @@ def convert_pdf_to_word():
         pdf_bytes = file.read()
         extracted_text = ""
         
-        # 1. پی ڈی ایف سے راؤنڈ ٹیکسٹ نکالنا
+        # پی ڈی ایف سے ٹیکسٹ نکالنا
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
@@ -98,26 +98,24 @@ def convert_pdf_to_word():
         lines = extracted_text.split('\n')
         for line in lines:
             if line.strip():
-                # 🔥 جادوئی قدم: پائتھن کے الٹے حروف کو پہلے ری شیپ کر کے جوڑنا
+                # 1. پہلے اعراب اور حروف کو معیاری خوبصورت شکل میں جوڑیں
                 reshaped_text = reshaper.reshape(line)
-                
-                # مائیکروسافٹ ورڈ کے لیے الٹے کیریکٹرز کو فزیکلی سیدھی ترتیب میں لانا
-                # یہ لوپ ہر لفظ کے حروف کو بکھرنے اور الٹا ہونے سے روکتا ہے
-                final_line = reshaped_text[::-1]
+                # 2. پھر دائیں سے بائیں کی بائی ڈائریکشنل ترتیب کو آفیشل طریقے سے ترتیب دیں (کوئی مینوئل الٹ پھیر نہیں)
+                display_line = get_display(reshaped_text)
                 
                 p = doc.add_paragraph()
-                p.add_run(final_line)
+                p.add_run(display_line)
                 
-                # خودکار فونٹ اور سائز کا درست انتخاب
-                if is_arabic_line(line):
+                # خودکار طریقے سے فونٹ کا انتخاب
+                if is_quranic_or_arabic(line):
                     font_name = 'Traditional Arabic'
                     font_size = 16
                 else:
                     font_name = 'Noto Nastaliq Urdu'
                     font_size = 14
                 
-                # مائیکروسافٹ ورڈ کے انجن پر سیٹنگز لاگو کرنا
-                fix_word_rtl_and_fonts(p, font_name, font_size)
+                # مائیکروسافٹ ورڈ کی اندرونی سیٹنگز لاگو کرنا
+                setup_microsoft_word_rtl(p, font_name, font_size)
 
         word_io = io.BytesIO()
         doc.save(word_io)
@@ -127,7 +125,7 @@ def convert_pdf_to_word():
             word_io,
             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             as_attachment=True,
-            download_name="Perfect_Urdu_Arabic_Fixed.docx"
+            download_name="Urdu_Arabic_Converted.docx"
         )
 
     except Exception as e:
