@@ -16,7 +16,7 @@ from bidi.algorithm import get_display
 app = Flask(__name__)
 CORS(app)
 
-# اُردو، عربی اور قرآنی اعراب کی مکمل سپورٹ کی کنفیگریشن
+# اُردو اور عربی اعراب کی مکمل کنفیگریشن
 configuration = {
     'delete_harakat': False,     # اعراب کو حذف نہیں کرنا
     'support_ligatures': True,   # قرآنی جوڑوں کو برقرار رکھنا
@@ -25,12 +25,12 @@ configuration = {
 }
 reshaper = arabic_reshaper.ArabicReshaper(configuration=configuration)
 
-# مائیکروسافٹ ورڈ کو مینوئل الٹنے کے بجائے آفیشل مڈل ایسٹ لینگویج ٹیگ دینا
-def setup_microsoft_word_rtl(paragraph, font_name, font_size_pt):
+# 🛠️ مائیکروسافٹ ورڈ کو آفیشل اردو/عربی اسکرپٹ پر مجبور کرنے کا فول پروف فنکشن
+def apply_strict_word_rtl(paragraph, font_name, font_size_pt):
     paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     pPr = paragraph._p.get_or_add_pPr()
     
-    # دائیں سے بائیں (RTL) الائنمنٹ لاگو کرنا
+    # 1. پیراگراف کو بتانا کہ یہ دائیں سے بائیں (RTL) ہے
     bidi = OxmlElement('w:bidi')
     bidi.set(qn('w:val'), '1')
     pPr.append(bidi)
@@ -39,19 +39,25 @@ def setup_microsoft_word_rtl(paragraph, font_name, font_size_pt):
         for run in paragraph.runs:
             rPr = run._r.get_or_add_rPr()
             
-            # رائٹ ٹو لیفٹ سکرپٹ ایکٹو کرنا
+            # 2. ہر حرف کو بتانا کہ وہ رائٹ ٹو لیفٹ اسکرپٹ کا حصہ ہے
             rtl_element = OxmlElement('w:rtl')
             rtl_element.set(qn('w:val'), '1')
             rPr.append(rtl_element)
             
-            # مائیکروسافٹ ورڈ کو بتانا کہ یہ کمپلیکس اسکرپٹ (CS) ہے تاکہ حروف نہ بکھریں
+            # 3. 🔥 سب سے اہم قدم: مائیکروسافٹ ورڈ کا ڈیفالٹ لینگویج انجن اردو پر سیٹ کرنا
+            # یہ کمانڈ ورڈ کو مجبور کرتی ہے کہ وہ حروف کو الگ الگ کرنے کے بجائے جوڑ کر لکھے
+            lang = OxmlElement('w:lang')
+            lang.set(qn('w:bidi'), 'ur-PK')  # اُردو (پاکستان/ہندوستان) رسم الخط کا آفیشل کوڈ
+            rPr.append(lang)
+            
+            # 4. فونٹس کو Complex Script (cs) میں سیٹ کرنا تاکہ نستعلیق چلے
             rFonts = OxmlElement('w:rFonts')
             rFonts.set(qn('w:cs'), font_name)
             rFonts.set(qn('w:ascii'), font_name)
             rFonts.set(qn('w:hAnsi'), font_name)
             rPr.append(rFonts)
             
-            # فونٹ کا سائز سیٹ کرنا
+            # 5. فونٹ کا سائز لاک کرنا
             sz = OxmlElement('w:sz')
             sz.set(qn('w:val'), str(int(font_size_pt * 2)))
             rPr.append(sz)
@@ -59,8 +65,8 @@ def setup_microsoft_word_rtl(paragraph, font_name, font_size_pt):
             szCs.set(qn('w:val'), str(int(font_size_pt * 2)))
             rPr.append(szCs)
 
-# قرآنی علامات اور اعراب کو چیک کرنے کا فنکشن
-def is_quranic_or_arabic(text):
+# قرآنی اعراب اور علامات چیک کرنے کا فنکشن
+def is_arabic_text(text):
     arabic_char_count = len(re.findall(r'[\u064b-\u065f\u0671\u06d6-\u06dc]', text))
     if arabic_char_count > 0:
         return True
@@ -68,7 +74,7 @@ def is_quranic_or_arabic(text):
 
 @app.route('/')
 def home():
-    return "Official Urdu & Arabic PDF to Word Converter Backend is Live!"
+    return "Official Microsoft Word RTL Arabic & Urdu Fixed Backend is Live!"
 
 @app.route('/convert', methods=['POST'])
 def convert_pdf_to_word():
@@ -98,24 +104,24 @@ def convert_pdf_to_word():
         lines = extracted_text.split('\n')
         for line in lines:
             if line.strip():
-                # 1. پہلے اعراب اور حروف کو معیاری خوبصورت شکل میں جوڑیں
+                # الفاظ کو خوبصورت شیپ میں جوڑنا
                 reshaped_text = reshaper.reshape(line)
-                # 2. پھر دائیں سے بائیں کی بائی ڈائریکشنل ترتیب کو آفیشل طریقے سے ترتیب دیں (کوئی مینوئل الٹ پھیر نہیں)
+                # دائیں سے بائیں کی بائی ڈائریکشنل ترتیب درست کرنا
                 display_line = get_display(reshaped_text)
                 
                 p = doc.add_paragraph()
                 p.add_run(display_line)
                 
                 # خودکار طریقے سے فونٹ کا انتخاب
-                if is_quranic_or_arabic(line):
+                if is_arabic_text(line):
                     font_name = 'Traditional Arabic'
                     font_size = 16
                 else:
                     font_name = 'Noto Nastaliq Urdu'
                     font_size = 14
                 
-                # مائیکروسافٹ ورڈ کی اندرونی سیٹنگز لاگو کرنا
-                setup_microsoft_word_rtl(p, font_name, font_size)
+                # مائیکروسافٹ ورڈ کی اندرونی فکسنگ لاگو کرنا
+                apply_strict_word_rtl(p, font_name, font_size)
 
         word_io = io.BytesIO()
         doc.save(word_io)
@@ -125,7 +131,7 @@ def convert_pdf_to_word():
             word_io,
             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             as_attachment=True,
-            download_name="Urdu_Arabic_Converted.docx"
+            download_name="Urdu_Arabic_Perfect_Converted.docx"
         )
 
     except Exception as e:
