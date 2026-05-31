@@ -19,14 +19,14 @@ CORS(app)
 
 # قرآنی رموز، اعراب، اُردو اور عربی کے تمام حروف کو ایک ساتھ فعال کرنے کی سیٹنگ
 configuration = {
-    'delete_harakat': False,     # زیر، زبر، پیش (اعراب) کو بالکل حذف نہیں کرنا
+    'delete_harakat': False,     # زیر، زبر، پیش (اعراب) کو حذف نہیں کرنا
     'support_ligatures': True,   # لاطینی اور قرآنی جوڑوں کو درست رکھنا
     'arabic': True,              # عربی ٹیکسٹ کی مکمل سپورٹ
-    'farsi': True,               # اُردو/فارسی کے مخصوص حروف (ٹ، ڈ، ڑ، چ، پ، گ) کی سپورٹ
+    'farsi': True,               # اُردو/فارسی کے مخصوص حروف کی سپورٹ
 }
 reshaper = arabic_reshaper.ArabicReshaper(configuration=configuration)
 
-# ورڈ ڈاکومنٹ میں رائٹ ٹو لیفٹ (RTL) اور بائی ڈائریکشنل سپورٹ ایکٹیو کرنے کا فنکشن
+# ورڈ ڈاکومنٹ میں رائٹ ٹو لیفٹ (RTL) سپورٹ ایکٹیو کرنے کا فنکشن
 def set_paragraph_rtl(p):
     p_pr = p._p.get_or_add_pPr()
     bidi = OxmlElement('w:bidi')
@@ -35,9 +35,8 @@ def set_paragraph_rtl(p):
 
 # یہ معلوم کرنے کا فنکشن کہ لائن میں زیادہ عربی/قرآنی آیت ہے یا اُردو
 def is_pure_arabic(text):
-    # اگر عبارت میں قرآنی اعراب یا مخصوص عربی علامات زیادہ ہوں
     arabic_char_count = len(re.findall(r'[\u064b-\u065f\u0671\u06d6-\u06dc]', text))
-    if arabic_char_count > 0 or ("|" in text): # یا قرآنی بریکٹ موجود ہوں
+    if arabic_char_count > 0 or ("|" in text):
         return True
     return False
 
@@ -58,7 +57,6 @@ def convert_pdf_to_word():
         pdf_bytes = file.read()
         extracted_text = ""
         
-        # پی ڈی ایف سے باریکی کے ساتھ ٹیکسٹ نکالنا
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
@@ -73,27 +71,26 @@ def convert_pdf_to_word():
         lines = extracted_text.split('\n')
         for line in lines:
             if line.strip():
-                # 1. اُردو، عربی اور قرآنی اعراب کو ایک ساتھ سیدھا اور درست شکل دینا
+                # اُردو، عربی اور قرآنی اعراب کو درست شکل دینا
                 reshaped_text = reshaper.reshape(line)
                 bidi_text = get_display(reshaped_text)
                 
                 p = doc.add_paragraph()
-                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT # دائیں سے بائیں الائنمنٹ
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
                 set_paragraph_rtl(p)
                 
                 run = p.add_run(bidi_text)
                 
-                # 2. خودکار فونٹ سلیکشن (اُردو کے لیے نستعلیق اور قرآن/عربی کے لیے روایتی عربی فونٹ)
+                # خودکار فونٹ سلیکشن
                 if is_pure_arabic(line):
                     run.font.name = 'Traditional Arabic'
-                    run.font.size = Pt(16) # عربی کے لیے فونٹ سائز تھوڑا بڑا (16pt) بہترین رہتا ہے
+                    run.font.size = Pt(16)
                     font_tag = 'Traditional Arabic'
                 else:
                     run.font.name = 'Noto Nastaliq Urdu'
-                    run.font.size = Pt(14) # اُردو کے لیے 14pt
+                    run.font.size = Pt(14)
                     font_tag = 'Noto Nastaliq Urdu'
                 
-                # مائیکروسافٹ ورڈ کے اندرونی نظام (XML) کو بتانا کہ یہ مشرقی زبان ہے
                 rPr = run._r.get_or_add_rPr()
                 rFonts = OxmlElement('w:rFonts')
                 rFonts.set(qn('w:cs'), font_tag)
