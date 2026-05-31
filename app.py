@@ -8,6 +8,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 import io
+import unicodedata  # یونیکوڈ کو اصلی حالت میں لانے کا آفیشل انجن
 import re
 
 app = Flask(__name__)
@@ -54,8 +55,8 @@ def is_arabic_line(text):
         return True
     return False
 
-# 🔥 ورڈ 10 کی پی ڈی ایف خامیوں کو جڑ سے ختم کرنے کا جادوئی انجن
-def fix_word10_urdu_layout(text):
+# 🔥 ورڈ 10 کی پی ڈی ایف خامیوں کو جڑ سے ختم کرنے کا فائنل ٹوکن انجن
+def fix_word10_text_structure(text):
     lines = text.split('\n')
     fixed_lines = []
     
@@ -64,34 +65,31 @@ def fix_word10_urdu_layout(text):
             fixed_lines.append("")
             continue
             
-        # 1. اصلی الفاظ بلاکس کو تلاش کرنا (جو ڈبل یا اس سے زیادہ اسپیس سے الگ ہیں)
-        word_blocks = re.split(r'\s{2,}', line.strip())
-        fixed_blocks = []
+        # لائن کو انفرادی الفاظ (Tokens) میں تقسیم کرنا
+        tokens = line.split()
+        fixed_tokens = []
         
-        for block in word_blocks:
-            # حروف کے درمیان موجود فیک سنگل اسپیس کو ختم کرنا
-            fused_word = block.replace(" ", "")
-            if not fused_word:
-                continue
-                
-            # اگر بلاک صرف نمبر (جیسے 2020) یا انگلش ہے تو اسے سیدھا رکھنا ہے
-            if re.match(r'^[A-Za-z0-9\W]+$', fused_word) and not re.search(r'[\u0600-\u06FF]', fused_word):
-                fixed_blocks.append(fused_word)
+        for token in tokens:
+            # اگر اس ٹوکن میں اردو یا عربی حروف/شکلیں موجود ہیں
+            if re.search(r'[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]', token):
+                # 1. صرف اس مخصوص لفظ کے الٹے حروف کو سیدھا کرنا
+                reversed_token = token[::-1]
+                # 2. اس کے ظاہری پکسل کوڈز کو حقیقی لاجیکل یونیکوڈ اردو میں تبدیل کرنا
+                clean_unicode = unicodedata.normalize('NFKC', reversed_token)
+                fixed_tokens.append(clean_unicode)
             else:
-                # اگر اردو/عربی ہے تو ورڈ 10 کی الٹی کوڈنگ کو سیدھا کرنے کے لیے حروف کو ریورس کرنا
-                fixed_blocks.append(fused_word[::-1])
+                # انگلش الفاظ یا نمبروں (جیسے 2026) کو بالکل نہیں چھیڑنا
+                fixed_tokens.append(token)
                 
-        # 2. چونکہ پورا جملہ بائیں سے دائیں الٹا تھا، اس لیے الفاظ کی ترتیب کو ریورس کرنا
-        fixed_blocks.reverse()
-        
-        # 3. صاف ستھرے الفاظ کو سنگل اسپیس کے ساتھ جوڑنا
-        fixed_lines.append(" ".join(fixed_blocks))
+        # الفاظ کی اصل ترتیب کو برقرار رکھتے ہوئے انہیں سنگل اسپیس سے جوڑنا
+        fixed_line = " ".join(fixed_tokens)
+        fixed_lines.append(fixed_line)
         
     return "\n".join(fixed_lines)
 
 @app.route('/')
 def home():
-    return "Perfect Word 10 Urdu Logical Converter Backend is Live!"
+    return "Final Core Word 10 Urdu & Arabic Logical Converter Backend is Live!"
 
 @app.route('/convert', methods=['POST'])
 def convert_pdf_to_word():
@@ -115,8 +113,8 @@ def convert_pdf_to_word():
         if not extracted_text.strip():
             return jsonify({"error": "Is PDF me koi text nahi mila."}), 400
 
-        # 🔥 مائیکروسافٹ ورڈ 10 کے ٹیکسٹ کو لائیو سیدھا اور فلٹر کرنا
-        perfect_logical_text = fix_word10_urdu_layout(extracted_text)
+        # 🔥 یہاں ہو رہا ہے فائنل یونیکوڈ اور ٹوکن فکسنگ کا جادو
+        perfect_logical_text = fix_word10_text_structure(extracted_text)
 
         doc = Document()
         
@@ -124,7 +122,7 @@ def convert_pdf_to_word():
         for line in lines:
             if line.strip():
                 p = doc.add_paragraph()
-                p.add_run(line) # اب خالص، جڑا ہوا اور اصلی لاجیکل ٹیکسٹ ورڈ میں جائے گا
+                p.add_run(line) # اب خالص لاجیکل ٹیکسٹ ورڈ میں جائے گا
                 
                 if is_arabic_line(line):
                     font_name = 'Traditional Arabic'
