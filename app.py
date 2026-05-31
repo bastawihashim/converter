@@ -1,4 +1,4 @@
-﻿import os
+import os
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
 import pdfplumber
@@ -8,21 +8,42 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 import io
+import re
+
+# اعراب اور قرآنی رموز کی حفاظت کے لیے لائبریریز
+import arabic_reshaper
+from bidi.algorithm import get_display
 
 app = Flask(__name__)
-# CORS کو آن کیا ہے تاکہ آپ کی ہوسٹنگر والی ویب سائٹ اس سرور سے بات کر سکے
 CORS(app)
 
-# مائیکروسافٹ ورڈ میں رائٹ ٹو لیفٹ (RTL) اردو ٹیکسٹ سیٹ کرنے کا فنکشن
-def set_cell_margins_and_rtl(p):
+# قرآنی رموز، اعراب، اُردو اور عربی کے تمام حروف کو ایک ساتھ فعال کرنے کی سیٹنگ
+configuration = {
+    'delete_harakat': False,     # زیر، زبر، پیش (اعراب) کو بالکل حذف نہیں کرنا
+    'support_ligatures': True,   # لاطینی اور قرآنی جوڑوں کو درست رکھنا
+    'arabic': True,              # عربی ٹیکسٹ کی مکمل سپورٹ
+    'farsi': True,               # اُردو/فارسی کے مخصوص حروف (ٹ، ڈ، ڑ، چ، پ، گ) کی سپورٹ
+}
+reshaper = arabic_reshaper.ArabicReshaper(configuration=configuration)
+
+# ورڈ ڈاکومنٹ میں رائٹ ٹو لیفٹ (RTL) اور بائی ڈائریکشنل سپورٹ ایکٹیو کرنے کا فنکشن
+def set_paragraph_rtl(p):
     p_pr = p._p.get_or_add_pPr()
     bidi = OxmlElement('w:bidi')
     bidi.set(qn('w:val'), '1')
     p_pr.append(bidi)
 
+# یہ معلوم کرنے کا فنکشن کہ لائن میں زیادہ عربی/قرآنی آیت ہے یا اُردو
+def is_pure_arabic(text):
+    # اگر عبارت میں قرآنی اعراب یا مخصوص عربی علامات زیادہ ہوں
+    arabic_char_count = len(re.findall(r'[\u064b-\u065f\u0671\u06d6-\u06dc]', text))
+    if arabic_char_count > 0 or ("|" in text): # یا قرآنی بریکٹ موجود ہوں
+        return True
+    return False
+
 @app.route('/')
 def home():
-    return "Urdu PDF to Word Converter Backend is Running Successfully!"
+    return "Perfect Urdu & Arabic PDF to Word Converter Backend is Running!"
 
 @app.route('/convert', methods=['POST'])
 def convert_pdf_to_word():
@@ -34,10 +55,10 @@ def convert_pdf_to_word():
         return jsonify({"error": "File ka naam khali hai"}), 400
 
     try:
-        # 1. PDF فائل کو پڑھنا اور ٹیکسٹ نکالنا
         pdf_bytes = file.read()
         extracted_text = ""
         
+        # پی ڈی ایف سے باریکی کے ساتھ ٹیکسٹ نکالنا
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
@@ -45,30 +66,39 @@ def convert_pdf_to_word():
                     extracted_text += text + "\n"
 
         if not extracted_text.strip():
-            return jsonify({"error": "Is PDF me koi text nahi mila. Shayed ye scanned image hai."}), 400
+            return jsonify({"error": "Is PDF me koi text nahi mila."}), 400
 
-        # 2. نیا مائیکروسافٹ ورڈ ڈاکومنٹ بنانا
         doc = Document()
         
-        # ٹیکسٹ کو لائن بائی لائن توڑ کر ورڈ میں ایڈ کرنا
         lines = extracted_text.split('\n')
         for line in lines:
             if line.strip():
+                # 1. اُردو، عربی اور قرآنی اعراب کو ایک ساتھ سیدھا اور درست شکل دینا
+                reshaped_text = reshaper.reshape(line)
+                bidi_text = get_display(reshaped_text)
+                
                 p = doc.add_paragraph()
-                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT # اردو کے لیے رائٹ الائنمنٹ
-                set_cell_margins_and_rtl(p) # اردو فارمیٹنگ ایکٹیو کرنا
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT # دائیں سے بائیں الائنمنٹ
+                set_paragraph_rtl(p)
                 
-                run = p.add_run(line)
-                run.font.name = 'Noto Nastaliq Urdu' # فونٹ کا نام
-                run.font.size = Pt(14) # فونٹ سائز 14pt
+                run = p.add_run(bidi_text)
                 
-                # ورڈ فائل کو لازمی بتانا کہ یہ اردو فونٹ ہے
+                # 2. خودکار فونٹ سلیکشن (اُردو کے لیے نستعلیق اور قرآن/عربی کے لیے روایتی عربی فونٹ)
+                if is_pure_arabic(line):
+                    run.font.name = 'Traditional Arabic'
+                    run.font.size = Pt(16) # عربی کے لیے فونٹ سائز تھوڑا بڑا (16pt) بہترین رہتا ہے
+                    font_tag = 'Traditional Arabic'
+                else:
+                    run.font.name = 'Noto Nastaliq Urdu'
+                    run.font.size = Pt(14) # اُردو کے لیے 14pt
+                    font_tag = 'Noto Nastaliq Urdu'
+                
+                # مائیکروسافٹ ورڈ کے اندرونی نظام (XML) کو بتانا کہ یہ مشرقی زبان ہے
                 rPr = run._r.get_or_add_rPr()
                 rFonts = OxmlElement('w:rFonts')
-                rFonts.set(qn('w:cs'), 'Noto Nastaliq Urdu')
+                rFonts.set(qn('w:cs'), font_tag)
                 rPr.append(rFonts)
 
-        # 3. ورڈ فائل کو میموری میں ہی سیو کر کے یوزر کو بھیجنا
         word_io = io.BytesIO()
         doc.save(word_io)
         word_io.seek(0)
@@ -77,7 +107,7 @@ def convert_pdf_to_word():
             word_io,
             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             as_attachment=True,
-            download_name="Urdu-Converted.docx"
+            download_name="Perfect-Urdu-Arabic-Converted.docx"
         )
 
     except Exception as e:
